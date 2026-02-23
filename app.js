@@ -27,11 +27,11 @@ const upload = multer({
 });
 
 const db = mysql.createConnection({
-    host: "zl-0k6.h.filess.io",
+    host: "9i7vve.h.filess.io",
     port: 3307,
-    user: "kinegit_beforefact",
-    password: "e21ff8d5584391be8da6a739de042848972db1b6",
-    database: "kinegit_beforefact"
+    user: "kinegit_grewaddwhy",
+    password: "87e7ec2bff5d3428dbb11f7d0686a3bd1d623fd7",
+    database: "kinegit_grewaddwhy",
 });
 
 db.connect((err) => {
