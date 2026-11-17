@@ -1,5 +1,3 @@
-USE `CA2FitnessGym_metdevelop`;
-
 -- Table `members`
 CREATE TABLE `members` (
 	`id` INT NOT NULL AUTO_INCREMENT,
@@ -10,7 +8,7 @@ CREATE TABLE `members` (
 	`contact` VARCHAR(10) NOT NULL,
 	`dob` DATE NOT NULL,
 	`role` ENUM('user', 'admin') DEFAULT 'user',
-    `gender` ENUM('Male', 'Female') NOT NULL,
+    `gender` ENUM('Male', 'Female', 'Other') NOT NULL,
     `profile_picture` VARCHAR(255) DEFAULT 'defaultProfilePicture.jpg',
 PRIMARY KEY (`id`));
 

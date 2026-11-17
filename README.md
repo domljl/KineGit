@@ -69,7 +69,8 @@ Before running this application, make sure you have the following installed:
    ```
 
 3. **Set up environment variables**
-   Create a `.env` file in the root directory with the following variables:
+   Copy `.env.example` to `.env` and replace its values. Set the same variables in your hosting provider before deployment. The app requires all values except `DB_PORT` (defaults to 3306); keep `.env` out of version control. Use a long random `SESSION_SECRET`.
+   The variables are:
    ```env
    DB_HOST=localhost
    DB_PORT=3306
@@ -80,8 +81,8 @@ Before running this application, make sure you have the following installed:
    ```
 
 4. **Set up the database**
-   - Create a MySQL database named `fitness_gym_db`
-   - Run the database creation script from the `database-script/dbscript.sql` file
+   - Create a MySQL database and set `DB_NAME` to its name
+   - Run `database-script/dbscript.sql` against that selected database. It creates tables and sample data; run it once on an empty database.
    - **For existing databases**: Run the profile picture migration script to add the new column:
      ```sql
      ALTER TABLE members ADD COLUMN profile_picture VARCHAR(255) DEFAULT 'default-profile.png';

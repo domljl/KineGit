@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require("express");
 const mysql = require("mysql2");
 const session = require("express-session");
@@ -26,18 +27,47 @@ const upload = multer({
     limits: { fileSize: 5 * 1024 * 1024 }
 });
 
-const db = mysql.createConnection({
-    host: "9i7vve.h.filess.io",
-    port: 3307,
-    user: "kinegit_grewaddwhy",
-    password: "87e7ec2bff5d3428dbb11f7d0686a3bd1d623fd7",
-    database: "kinegit_grewaddwhy",
+const requiredEnvironment = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'SESSION_SECRET'];
+for (const name of requiredEnvironment) {
+    if (!process.env[name]) throw new Error(`Missing required environment variable: ${name}`);
+}
+const databasePort = Number(process.env.DB_PORT || 3306);
+if (!Number.isInteger(databasePort) || databasePort < 1 || databasePort > 65535) {
+    throw new Error("DB_PORT must be an integer between 1 and 65535");
+}
+
+const db = mysql.createPool({
+    host: process.env.DB_HOST,
+    port: databasePort,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME
 });
 
-db.connect((err) => {
-    if (err) console.error("Error connecting to MySQL:", err);
-    else console.log("Connected to MySQL database");
-});
+// Each transaction must keep its queries on one pooled connection.
+const withDatabaseConnection = (handler) => (req, res, next) => {
+    db.getConnection((err, connection) => {
+        if (err) return next(err);
+        const release = () => {
+            res.removeListener('close', destroy);
+            connection.release();
+        };
+        const destroy = () => {
+            res.removeListener('finish', release);
+            connection.destroy();
+        };
+        res.once('finish', release);
+        res.once('close', destroy);
+        try {
+            handler(req, res, connection);
+        } catch (error) {
+            res.removeListener('finish', release);
+            res.removeListener('close', destroy);
+            connection.destroy();
+            next(error);
+        }
+    });
+};
 
 // View engine and middleware
 app.set("view engine", "ejs");
@@ -47,7 +77,7 @@ app.use(express.json());
 
 // Session Middleware
 app.use(session({
-    secret: "c237isamazingandfun",
+    secret: process.env.SESSION_SECRET,
     resave: false,
     saveUninitialized: true,
     cookie: { maxAge: 1000 * 60 * 60 * 24 * 7 }
@@ -71,10 +101,10 @@ const checkAdmin = (req, res, next) => {
 
 // Middleware: Form validation
 const validateRegistration = (req, res, next) => {
-    const { username, email, gender, dob, contact, address, password, role } = req.body;
+    const { username, email, gender, dob, contact, address, password } = req.body;
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-    if (!username || !email || !gender || !dob || !contact || !address || !password || !role) {
+    if (!username || !email || !gender || !dob || !contact || !address || !password) {
         req.flash("error", "All fields are required.");
         req.flash("formData", req.body);
         return res.redirect("/register");
@@ -109,11 +139,6 @@ app.get("/", (req, res) => {
             totalMembers: 0
         }
     };
-
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("index", renderData);
-    }
 
     const sqlLocations = "SELECT * FROM locations ORDER BY name LIMIT 3";
     db.query(sqlLocations, (err, locations) => {
@@ -208,11 +233,6 @@ app.get("/rooms", (req, res) => {
         searchQuery: searchQuery
     };
 
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("rooms", renderData);
-    }
-
     let sql = `
         SELECT r.*, l.name as location_name, l.address as location_address 
         FROM rooms r 
@@ -272,11 +292,6 @@ app.get("/classes", (req, res) => {
         selectedRoom: roomFilter || null,
         selectedLocation: locationFilter || null
     };
-
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("classes", renderData);
-    }
 
     let sql = `
         SELECT c.*, l.name as location_name, l.address as location_address, r.room_name,
@@ -353,11 +368,6 @@ app.get("/bookings", checkAuthenticated, (req, res) => {
         locationFilter: location || '',
         locations: []
     };
-
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("afterloginejs/bookings", renderData);
-    }
 
     // Build dynamic SQL query for bookings with search functionality
     let sqlBookings = `
@@ -480,11 +490,6 @@ app.post("/book-class", checkAuthenticated, (req, res) => {
         return res.redirect("/bookings");
     }
 
-    if (!db || db.state === 'disconnected') {
-        req.flash("error", "Database connection not available");
-        return res.redirect("/bookings");
-    }
-
     const checkBookingSQL = "SELECT * FROM bookings WHERE member_id = ? AND class_id = ? AND status = 'Booked'";
     db.query(checkBookingSQL, [userId, classId], (err, existingBookings) => {
         if (err) {
@@ -550,11 +555,6 @@ app.post("/cancel-booking", checkAuthenticated, (req, res) => {
 
     if (!bookingId) {
         req.flash("error", "Booking ID is required");
-        return res.redirect("/bookings");
-    }
-
-    if (!db || db.state === 'disconnected') {
-        req.flash("error", "Database connection not available");
         return res.redirect("/bookings");
     }
 
@@ -806,7 +806,7 @@ app.post("/billing/payment-methods/:id/delete", checkAuthenticated, (req, res) =
 });
 
 // Add funds to wallet
-app.post("/billing/add-funds", checkAuthenticated, (req, res) => {
+app.post("/billing/add-funds", checkAuthenticated, withDatabaseConnection((req, res, db) => {
     const memberId = req.session.user.member_id || req.session.user.id;
     const { amount, paymentMethodId } = req.body;
     const fundAmount = parseFloat(amount);
@@ -884,10 +884,10 @@ app.post("/billing/add-funds", checkAuthenticated, (req, res) => {
             });
         }
     });
-});
+}));
 
 // Select membership plan
-app.post("/billing/select-plan", checkAuthenticated, (req, res) => {
+app.post("/billing/select-plan", checkAuthenticated, withDatabaseConnection((req, res, db) => {
     const memberId = req.session.user.member_id || req.session.user.id;
     const { planId } = req.body;
     const sqlCheckSubscription = "SELECT * FROM membership_subscriptions WHERE member_id = ? AND status = 'Active'";
@@ -997,7 +997,7 @@ app.post("/billing/select-plan", checkAuthenticated, (req, res) => {
             });
         });
     });
-});
+}));
 
 // Cancel membership plan
 app.post("/billing/cancel-plan", checkAuthenticated, (req, res) => {
@@ -1043,7 +1043,7 @@ app.post("/billing/cancel-plan", checkAuthenticated, (req, res) => {
 });
 
 // Switch membership plan
-app.post("/billing/switch-plan", checkAuthenticated, (req, res) => {
+app.post("/billing/switch-plan", checkAuthenticated, withDatabaseConnection((req, res, db) => {
     const memberId = req.session.user.member_id || req.session.user.id;
     const { planId } = req.body;
     
@@ -1168,7 +1168,7 @@ app.post("/billing/switch-plan", checkAuthenticated, (req, res) => {
             });
         });
     });
-});
+}));
 
 // User Dashboard route (require login)
 app.get("/userDashboard", checkAuthenticated, (req, res) => {
@@ -1252,11 +1252,6 @@ app.get("/dashboard", checkAuthenticated, checkAdmin, (req, res) => {
             totalBookings: 0
         }
     };
-
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("admin/dashboard", renderData);
-    }
 
     const sqlStats = `
         SELECT 
@@ -1482,7 +1477,7 @@ app.post("/admin/members/:id/update", (req, res, next) => {
 });
 
 // Delete member
-app.post("/admin/members/:id/delete", checkAuthenticated, checkAdmin, (req, res) => {
+app.post("/admin/members/:id/delete", checkAuthenticated, checkAdmin, withDatabaseConnection((req, res, db) => {
     const memberId = req.params.id;
     const currentUserId = req.session.user.id;
 
@@ -1604,7 +1599,7 @@ app.post("/admin/members/:id/delete", checkAuthenticated, checkAdmin, (req, res)
             });
         });
     });
-});
+}));
 
 app.get("/admin/locations", checkAuthenticated, checkAdmin, (req, res) => {
     const renderData = {
@@ -1614,11 +1609,6 @@ app.get("/admin/locations", checkAuthenticated, checkAdmin, (req, res) => {
         errors: req.flash("error"),
         locations: []
     };
-
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("admin/panel/manageLocations", renderData);
-    }
 
     const sqlLocations = `
         SELECT l.*, 
@@ -2219,11 +2209,6 @@ app.get("/admin/classes", checkAuthenticated, checkAdmin, (req, res) => {
         locations: []
     };
 
-    if (!db || db.state === 'disconnected') {
-        console.error("Database connection not available");
-        return res.render("admin/panel/manageClasses", renderData);
-    }
-
     const sqlClasses = `
         SELECT c.*, l.name as location_name, r.room_name,
                COUNT(b.booking_id) as booking_count
@@ -2504,7 +2489,7 @@ app.get("/register", (req, res) => {
 });
 
 app.post("/register", validateRegistration, (req, res) => {
-    const { username, email, gender, dob, contact, address, password, role } = req.body;
+    const { username, email, gender, dob, contact, address, password } = req.body;
     const sqlCheckUser = "SELECT * FROM members WHERE username = ? OR email = ?";
     const sqlInsertUser = "INSERT INTO members (username, email, password, contact, dob, role, gender, address, profile_picture) VALUES (?, ?, SHA1(?), ?, ?, ?, ?, ?, ?)";
 
@@ -2521,7 +2506,7 @@ app.post("/register", validateRegistration, (req, res) => {
             return res.redirect("/register");
         }
 
-        db.query(sqlInsertUser, [username, email, password, contact, dob, role, gender, address, "defaultProfilePicture.jpg"], (err, result) => {
+        db.query(sqlInsertUser, [username, email, password, contact, dob, "user", gender, address, "defaultProfilePicture.jpg"], (err, result) => {
             if (err) {
                 console.error("Database error: ", err);
                 req.flash("error", "Registration failed. Please try again.");
