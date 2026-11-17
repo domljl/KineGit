@@ -41,8 +41,11 @@ const db = mysql.createPool({
     port: databasePort,
     user: process.env.DB_USER,
     password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME
+    database: process.env.DB_NAME,
+    connectionLimit: 1
 });
+// Serverless instances must not retain idle connections against the database limit.
+db.on('release', (connection) => connection.destroy());
 
 // Each transaction must keep its queries on one pooled connection.
 const withDatabaseConnection = (handler) => (req, res, next) => {

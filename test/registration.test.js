@@ -13,7 +13,7 @@ function load(env = environment) {
     const app = { set() {}, use() {}, listen() {}, get() {}, put() {}, delete() {}, post(path, ...handlers) { routes.set(path, handlers); } };
     const express = Object.assign(() => app, { static() {}, urlencoded() {}, json() {} });
     const state = { routes, dotenvLoaded: false };
-    const pool = { query() { assert.fail('Unexpected pool query'); }, getConnection() { assert.fail('Unexpected connection request'); } };
+    const pool = Object.assign(new EventEmitter(), { query() { assert.fail('Unexpected pool query'); }, getConnection() { assert.fail('Unexpected connection request'); } });
     const dependencies = {
         express,
         mysql2: { createPool(config) { state.poolConfig = config; return pool; } },
@@ -49,8 +49,32 @@ const loaded = load();
 assert.equal(loaded.dotenvLoaded, true);
 assert.deepEqual(JSON.parse(JSON.stringify(loaded.poolConfig)), {
     host: environment.DB_HOST, port: 3307, user: environment.DB_USER,
-    password: environment.DB_PASSWORD, database: environment.DB_NAME
+    password: environment.DB_PASSWORD, database: environment.DB_NAME, connectionLimit: 1
 });
+// Exercise mysql2's real release path without opening a network connection.
+const actualPool = require('mysql2').createPool(loaded.poolConfig);
+actualPool.on('release', loaded.pool.listeners('release')[0]);
+let destroyed = 0;
+const idleConnection = {
+    _pool: actualPool,
+    destroy() {
+        destroyed++;
+        this._pool = null;
+        actualPool._removeConnection(this);
+    }
+};
+actualPool._connectionQueue.push((error, connection) => {
+    assert.equal(error, null);
+    assert.equal(connection, idleConnection);
+    assert.equal(destroyed, 0, 'Queued queries must retain the connection');
+    actualPool.releaseConnection(connection);
+    assert.equal(destroyed, 1, 'An idle connection must be destroyed immediately');
+    assert.equal(actualPool._freeConnections.length, 0);
+    actualPool.end();
+});
+actualPool.releaseConnection(idleConnection);
+assert.equal(destroyed, 0);
+
 assert.equal(loaded.sessionConfig.secret, environment.SESSION_SECRET);
 assert.equal(load({ ...environment, DB_PORT: undefined }).poolConfig.port, 3306);
 for (const name of ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'SESSION_SECRET']) {
